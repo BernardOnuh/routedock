@@ -19,9 +19,60 @@ interface CacheEntry {
 }
 
 const CACHE_TTL_MS = 60_000
+const DEFAULT_MANIFEST_CACHE_MAX_SIZE = 512
 
-/** In-memory manifest cache keyed by base URL. */
-const manifestCache = new Map<string, CacheEntry>()
+/**
+ * Simple LRU cache backed by Map's insertion-order guarantee.
+ * Bounds memory for long-running agents that contact many unique endpoints.
+ */
+class LruCache<K, V> {
+  private map = new Map<K, V>()
+
+  constructor(private maxSize: number) {}
+
+  get(key: K): V | undefined {
+    if (!this.map.has(key)) return undefined
+    const value = this.map.get(key) as V
+    this.map.delete(key)
+    this.map.set(key, value)
+    return value
+  }
+
+  set(key: K, value: V): void {
+    if (this.map.has(key)) {
+      this.map.delete(key)
+    } else if (this.map.size >= this.maxSize) {
+      const oldestKey = this.map.keys().next().value
+      if (oldestKey !== undefined) {
+        this.map.delete(oldestKey)
+      }
+    }
+    this.map.set(key, value)
+  }
+
+  setMaxSize(maxSize: number): void {
+    this.maxSize = maxSize
+    while (this.map.size > this.maxSize) {
+      const oldestKey = this.map.keys().next().value
+      if (oldestKey === undefined) break
+      this.map.delete(oldestKey)
+    }
+  }
+}
+
+/** In-memory manifest cache keyed by base URL, bounded to avoid unbounded heap growth. */
+const manifestCache = new LruCache<string, CacheEntry>(DEFAULT_MANIFEST_CACHE_MAX_SIZE)
+
+/**
+ * Override the manifest cache's max size (default 512). Affects the shared,
+ * process-wide cache used by all RouteDockClient instances.
+ */
+export function configureManifestCache(maxSize: number): void {
+  if (!Number.isInteger(maxSize) || maxSize <= 0) {
+    throw new RouteDockManifestError('Invalid manifest cache size: ' + maxSize)
+  }
+  manifestCache.setMaxSize(maxSize)
+}
 
 export interface ModeSelectOptions {
   /** Force mpp-session if the provider supports it */
