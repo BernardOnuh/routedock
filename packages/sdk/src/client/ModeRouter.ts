@@ -25,6 +25,10 @@ interface CacheEntry {
 const CACHE_TTL_MS = 60_000
 const DEFAULT_MANIFEST_CACHE_MAX_SIZE = 512
 
+/**
+ * Simple LRU cache backed by Map's insertion-order guarantee.
+ * Bounds memory for long-running agents that contact many unique endpoints.
+ */
 class LruCache<K, V> {
   private map = new Map<K, V>()
 
@@ -60,14 +64,21 @@ class LruCache<K, V> {
   }
 }
 
+/** In-memory manifest cache keyed by base URL, bounded to avoid unbounded heap growth. */
 const manifestCache = new LruCache<string, CacheEntry>(DEFAULT_MANIFEST_CACHE_MAX_SIZE)
 
+/**
+ * Override the manifest cache's max size (default 512). Affects the shared,
+ * process-wide cache used by all RouteDockClient instances.
+ */
 export function configureManifestCache(maxSize: number): void {
   if (!Number.isInteger(maxSize) || maxSize <= 0) {
     throw new RouteDockManifestError('Invalid manifest cache size: ' + maxSize)
   }
   manifestCache.setMaxSize(maxSize)
 }
+
+export type RouteDockLogger = (message: string) => void
 
 function parseMajorMinor(version: string): [number, number] {
   const parts = version.split('.')
@@ -100,6 +111,8 @@ export interface ModeSelectOptions {
   sustained?: boolean
   session?: boolean
   forceMode?: PaymentMode
+  /** Structured logger for mode selection events. Defaults to no-op. */
+  logger?: RouteDockLogger
 }
 
 export async function fetchManifest(
@@ -153,6 +166,7 @@ export function selectMode(
   options: ModeSelectOptions = {},
 ): PaymentMode {
   const modes = manifest.modes
+  const log = options.logger ?? (() => {})
 
   if (options.forceMode) {
     if (!modes.includes(options.forceMode)) {
@@ -161,25 +175,25 @@ export function selectMode(
         ' (available: ' + modes.join(', ') + ')',
       )
     }
-    console.log('[RouteDock] ' + manifest.name + ' -> ' + options.forceMode + ' (forced)')
+    log(`[RouteDock] ${manifest.name} → ${options.forceMode} (forced)`)
     return options.forceMode
   }
 
   if ((options.sustained || options.session) && modes.includes('mpp-session')) {
     const mode: PaymentMode = 'mpp-session'
-    console.log('[RouteDock] ' + manifest.name + ' -> ' + mode)
+    log(`[RouteDock] ${manifest.name} → ${mode}`)
     return mode
   }
 
   if (modes.includes('mpp-charge')) {
     const mode: PaymentMode = 'mpp-charge'
-    console.log('[RouteDock] ' + manifest.name + ' -> ' + mode)
+    log(`[RouteDock] ${manifest.name} → ${mode}`)
     return mode
   }
 
   if (modes.includes('x402')) {
     const mode: PaymentMode = 'x402'
-    console.log('[RouteDock] ' + manifest.name + ' -> ' + mode)
+    log(`[RouteDock] ${manifest.name} → ${mode}`)
     return mode
   }
 
